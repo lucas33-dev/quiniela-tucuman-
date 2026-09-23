@@ -83,12 +83,21 @@ app.MapGet("/api/scraper/real", async (AppDbContext db) =>
         var hoy = HoyArgentina();
         var url = "https://www.laquinieladetucuman.com.ar/";
         var web = new HtmlWeb();
+        // CAMBIO 6: se presenta como un navegador comun; algunas paginas rechazan pedidos de "robots"
+        web.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
         var documento = web.Load(url);
 
         // Buscamos todas las cajas de sorteos
         var titulos = documento.DocumentNode.SelectNodes("//h4[contains(translate(text(), 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'QUINIELA')]");
 
-        if (titulos == null) return Results.BadRequest("No se encontraron sorteos en la pagina.");
+        if (titulos == null)
+        {
+            // CAMBIO 7: si falla, muestra que recibio el servidor para poder diagnosticar
+            var tituloPagina = documento.DocumentNode.SelectSingleNode("//title")?.InnerText.Trim() ?? "(sin titulo)";
+            var textoPagina = System.Text.RegularExpressions.Regex.Replace(documento.DocumentNode.InnerText, @"\s+", " ").Trim();
+            if (textoPagina.Length > 300) textoPagina = textoPagina.Substring(0, 300);
+            return Results.BadRequest($"No se encontraron sorteos. Titulo: {tituloPagina} | Largo: {documento.DocumentNode.InnerHtml.Length} | Inicio: {textoPagina}");
+        }
 
         int sorteosGuardados = 0;
 
