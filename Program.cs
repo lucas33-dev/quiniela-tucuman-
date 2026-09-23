@@ -42,7 +42,7 @@ app.MapGet("/api/sorteos/hoy", async (AppDbContext db) =>
         .Where(s => s.Fecha.Date == hoy)
         .ToListAsync();
 
-    return Results.Ok(sorteos);
+    return Results.Ok(SinDuplicados(sorteos));
 });
 
 // 2. Pide el historial de las ultimas 5 fechas
@@ -69,7 +69,7 @@ app.MapGet("/api/sorteos/fecha/{fechaBuscada}", async (string fechaBuscada, AppD
             .Where(s => s.Fecha.Date == fechaReal.Date)
             .ToListAsync();
 
-        return Results.Ok(sorteos);
+        return Results.Ok(SinDuplicados(sorteos));
     }
     return Results.BadRequest("Fecha incorrecta");
 });
@@ -78,6 +78,9 @@ app.MapGet("/api/sorteos/fecha/{fechaBuscada}", async (string fechaBuscada, AppD
 // --- EL SCRAPER ROBOT ---
 app.MapGet("/api/scraper/real", async (AppDbContext db) =>
 {
+    // CAMBIO 8: si dos pedidos llegan a la vez (cron + motor automatico), el segundo espera.
+    // Sin esto los dos guardaban el mismo sorteo y salia duplicado.
+    await Candado.Scraper.WaitAsync();
     try
     {
         var hoy = HoyArgentina();
@@ -131,7 +134,12 @@ app.MapGet("/api/scraper/real", async (AppDbContext db) =>
                     int cantidad = Math.Min(20, nodosNumeros.Count);
                     for (int i = 0; i < cantidad; i++)
                     {
-                        posicionesList.Add(new PosicionSorteo { Posicion = i + 1, Numero = nodosNumeros[i].InnerText.Trim() });
+                        // CAMBIO 10: la pagina muestra 2 columnas (1-10 a la izquierda, 11-20 a la derecha)
+                        // y sus celdas vienen intercaladas: 1, 11, 2, 12, 3, 13...
+                        int posicion = cantidad == 20
+                            ? (i % 2 == 0 ? (i / 2) + 1 : 10 + (i / 2) + 1)
+                            : i + 1;
+                        posicionesList.Add(new PosicionSorteo { Posicion = posicion, Numero = nodosNumeros[i].InnerText.Trim() });
                     }
 
                     db.Sorteos.Add(new Sorteo { Fecha = hoy, TipoSorteo = nombreSorteo, Posiciones = posicionesList });
@@ -147,6 +155,10 @@ app.MapGet("/api/scraper/real", async (AppDbContext db) =>
     {
         return Results.BadRequest($"Fallo técnico en el Scraper: {ex.Message}");
     }
+    finally
+    {
+        Candado.Scraper.Release();
+    }
 });
 
 app.Run();
@@ -156,6 +168,13 @@ app.Run();
 // CAMBIO 4: el servidor en la nube usa hora UTC (3 horas adelantada respecto a Tucuman).
 // Sin esto, el sorteo de las 21:00 se guardaria con la fecha de "mañana".
 static DateTime HoyArgentina() => DateTime.UtcNow.AddHours(-3).Date;
+
+// CAMBIO 9: si por algun motivo hay dos sorteos con el mismo nombre en el dia, muestra solo el mas nuevo
+static List<Sorteo> SinDuplicados(List<Sorteo> lista) =>
+    lista.GroupBy(s => s.TipoSorteo)
+         .Select(g => g.OrderByDescending(x => x.Id).First())
+         .OrderBy(x => x.Id)
+         .ToList();
 
 static string ConstruirConexion(string? url)
 {
@@ -181,6 +200,12 @@ static string ConstruirConexion(string? url)
         TrustServerCertificate = true
     };
     return b.ConnectionString;
+}
+
+// --- CANDADO DEL ROBOT ---
+public static class Candado
+{
+    public static readonly SemaphoreSlim Scraper = new(1, 1);
 }
 
 // --- MODELOS DE BASE DE DATOS ---
