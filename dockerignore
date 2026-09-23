@@ -1,0 +1,6 @@
+bin/
+obj/
+.vs/
+quiniela.db
+quiniela.db-shm
+quiniela.db-wal
